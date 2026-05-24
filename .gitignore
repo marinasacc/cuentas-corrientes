@@ -1,0 +1,47 @@
+# Configuracion sensible (contiene app password)
+smtp_config.json
+
+# Configuracion de login (contiene hash de contrasena y secret key)
+login_config.json
+
+# Credenciales de Google y configuracion de Drive
+google_credentials.json
+drive_config.json
+
+# Base de datos
+database/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Backups
+backups/
+
+# Package de deploy generado
+deploy_package.zip
+
+# Excels cargados y exportados
+uploads/
+exports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -7,6 +7,8 @@ login_config.json
 # Credenciales de Google y configuracion de Drive
 google_credentials.json
 drive_config.json
+oauth_client_secret.json
+drive_token.json
 
 # Base de datos
 database/
@@ -17,6 +19,7 @@ database/
 
 # Backups
 backups/
+backup_status.json
 
 # Package de deploy generado
 deploy_package.zip

@@ -2,27 +2,49 @@
 Backup automatico de la base de datos a Google Drive.
 Se ejecuta semanalmente desde PythonAnywhere (tarea programada).
 
+Usa OAuth (no cuenta de servicio) para evitar el limite de cuota.
+
 Requisitos:
-1. google_credentials.json (cuenta de servicio) en la carpeta del proyecto
+1. drive_token.json (generado con setup_oauth.py en tu PC) en la carpeta del proyecto
 2. drive_config.json con el ID de la carpeta destino en Drive
-3. Compartir esa carpeta en Drive con el email de la cuenta de servicio (Editor)
 """
 
 import os
 import json
 import shutil
 from datetime import datetime
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'database', 'cuentas.db')
-CREDENTIALS_PATH = os.path.join(BASE_DIR, 'google_credentials.json')
+TOKEN_PATH = os.path.join(BASE_DIR, 'drive_token.json')
 DRIVE_CONFIG_PATH = os.path.join(BASE_DIR, 'drive_config.json')
 BACKUPS_LOCAL_DIR = os.path.join(BASE_DIR, 'backups')
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+
+def get_drive_service():
+    """Obtener servicio de Drive con credenciales OAuth."""
+    if not os.path.exists(TOKEN_PATH):
+        return None
+
+    creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+
+    # Refrescar token si expiro
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        # Guardar token actualizado
+        with open(TOKEN_PATH, 'w') as f:
+            f.write(creds.to_json())
+
+    if not creds or not creds.valid:
+        return None
+
+    return build('drive', 'v3', credentials=creds)
 
 
 def hacer_backup():
@@ -43,14 +65,14 @@ def hacer_backup():
     # Limpiar backups locales viejos (dejar solo los ultimos 10)
     limpiar_backups_locales()
 
-    # Subir a Drive
-    if not os.path.exists(CREDENTIALS_PATH):
-        print('AVISO: No existe google_credentials.json. No se sube a Drive.')
+    # Subir a Drive con OAuth
+    if not os.path.exists(TOKEN_PATH):
+        print('AVISO: No existe drive_token.json. Backup solo local.')
+        print('       Generar con: python setup_oauth.py')
         return True
 
     if not os.path.exists(DRIVE_CONFIG_PATH):
-        print('AVISO: No existe drive_config.json. No se sube a Drive.')
-        print('       Crear con: {"folder_id": "ID_de_la_carpeta_en_Drive"}')
+        print('AVISO: No existe drive_config.json. Backup solo local.')
         return True
 
     try:
@@ -62,10 +84,10 @@ def hacer_backup():
             print('AVISO: folder_id vacio en drive_config.json')
             return True
 
-        creds = service_account.Credentials.from_service_account_file(
-            CREDENTIALS_PATH, scopes=SCOPES
-        )
-        service = build('drive', 'v3', credentials=creds)
+        service = get_drive_service()
+        if not service:
+            print('ERROR: No se pudo autenticar con Drive (token invalido?)')
+            return False
 
         file_metadata = {
             'name': backup_name,
@@ -82,7 +104,7 @@ def hacer_backup():
         print(f'[OK] Subido a Drive: {result.get("name")}')
         print(f'     Link: {result.get("webViewLink")}')
 
-        # Limpiar backups viejos en Drive (dejar solo los ultimos 12 = 3 meses)
+        # Limpiar backups viejos en Drive (dejar solo los ultimos 12)
         limpiar_backups_drive(service, folder_id)
 
         return True

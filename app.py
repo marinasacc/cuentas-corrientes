@@ -9,6 +9,7 @@ import sqlite3
 import smtplib
 import uuid
 import secrets
+import threading
 from functools import wraps
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
@@ -29,6 +30,10 @@ UPLOADS_DIR = os.path.join(BASE_DIR, 'uploads')
 EXPORTS_DIR = os.path.join(BASE_DIR, 'exports')
 SMTP_CONFIG_PATH = os.path.join(BASE_DIR, 'smtp_config.json')
 LOGIN_CONFIG_PATH = os.path.join(BASE_DIR, 'login_config.json')
+BACKUP_STATUS_PATH = os.path.join(BASE_DIR, 'backup_status.json')
+
+# Cada cuantas horas hacer backup automatico al usar la app
+BACKUP_INTERVAL_HOURS = 24
 
 # Personas del equipo (para registrar quien contacto al cliente)
 EQUIPO = ['Marina', 'Alberto', 'Juan Fanti', 'Romina', 'Fabiana', 'Sergio', 'Otro']
@@ -309,6 +314,121 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for('login'))
+
+
+# ============================================================
+# BACKUP AUTOMATICO
+# ============================================================
+
+def get_last_backup_time():
+    """Devuelve datetime del ultimo backup o None."""
+    if not os.path.exists(BACKUP_STATUS_PATH):
+        return None
+    try:
+        with open(BACKUP_STATUS_PATH, 'r') as f:
+            data = json.load(f)
+            return datetime.fromisoformat(data.get('last_backup'))
+    except Exception:
+        return None
+
+
+def set_last_backup_time(dt=None, ok=True, mensaje=''):
+    """Guarda timestamp del ultimo backup."""
+    if dt is None:
+        dt = datetime.now()
+    with open(BACKUP_STATUS_PATH, 'w') as f:
+        json.dump({
+            'last_backup': dt.isoformat(),
+            'last_status': 'ok' if ok else 'error',
+            'last_mensaje': mensaje
+        }, f)
+
+
+def run_backup_async():
+    """Ejecutar backup en background sin bloquear el request."""
+    def task():
+        try:
+            from backup_drive import hacer_backup
+            ok = hacer_backup()
+            set_last_backup_time(ok=ok)
+        except Exception as e:
+            print(f'Error en backup automatico: {e}')
+            set_last_backup_time(ok=False, mensaje=str(e))
+
+    t = threading.Thread(target=task, daemon=True)
+    t.start()
+
+
+_backup_lock = threading.Lock()
+_backup_running = [False]
+
+
+@app.before_request
+def check_auto_backup():
+    """Verificar si hay que hacer backup automatico (si paso BACKUP_INTERVAL_HOURS)."""
+    # Solo para usuarios logueados, ignorar archivos estaticos y login
+    if not session.get('logged_in'):
+        return
+    if request.endpoint in ('static', 'login', 'logout', 'setup'):
+        return
+
+    with _backup_lock:
+        if _backup_running[0]:
+            return  # Ya hay un backup corriendo
+
+        last = get_last_backup_time()
+        if last is None or (datetime.now() - last) > timedelta(hours=BACKUP_INTERVAL_HOURS):
+            _backup_running[0] = True
+
+            def task():
+                try:
+                    from backup_drive import hacer_backup
+                    ok = hacer_backup()
+                    set_last_backup_time(ok=ok)
+                except Exception as e:
+                    print(f'Error en backup automatico: {e}')
+                    set_last_backup_time(ok=False, mensaje=str(e))
+                finally:
+                    _backup_running[0] = False
+
+            threading.Thread(target=task, daemon=True).start()
+
+
+@app.route('/api/backup-status', methods=['GET'])
+@api_login_required
+def api_backup_status():
+    """Devuelve info del ultimo backup."""
+    if not os.path.exists(BACKUP_STATUS_PATH):
+        return jsonify({'last_backup': None})
+    try:
+        with open(BACKUP_STATUS_PATH, 'r') as f:
+            data = json.load(f)
+        return jsonify(data)
+    except Exception:
+        return jsonify({'last_backup': None})
+
+
+@app.route('/api/backup-manual', methods=['POST'])
+@api_login_required
+def api_backup_manual():
+    """Disparar backup manual."""
+    with _backup_lock:
+        if _backup_running[0]:
+            return jsonify({'error': 'Ya hay un backup corriendo'}), 400
+        _backup_running[0] = True
+
+    def task():
+        try:
+            from backup_drive import hacer_backup
+            ok = hacer_backup()
+            set_last_backup_time(ok=ok)
+        except Exception as e:
+            set_last_backup_time(ok=False, mensaje=str(e))
+        finally:
+            _backup_running[0] = False
+
+    threading.Thread(target=task, daemon=True).start()
+    return jsonify({'ok': True, 'mensaje': 'Backup iniciado en segundo plano'})
 
 
 @app.route('/api/cambiar-password', methods=['POST'])

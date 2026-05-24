@@ -72,9 +72,71 @@ async function verificarEstado() {
                 `<i class="bi bi-calendar-check me-1"></i>Ultima carga: ${fecha.toLocaleDateString('es-AR')} ${fecha.toLocaleTimeString('es-AR', {hour: '2-digit', minute: '2-digit'})} | ${info.total_clientes} clientes`;
 
             await cargarClientes();
+            await actualizarInfoBackup();
         }
     } catch (error) {
         console.error('Error:', error);
+    }
+}
+
+
+async function actualizarInfoBackup() {
+    try {
+        const resp = await fetch('/api/backup-status');
+        const data = await resp.json();
+
+        const el = document.getElementById('info-backup');
+        if (!data.last_backup) {
+            el.innerHTML = `<i class="bi bi-cloud-slash me-1"></i>Sin backup aun`;
+            return;
+        }
+
+        const fecha = new Date(data.last_backup);
+        const ahora = new Date();
+        const diffHs = Math.floor((ahora - fecha) / (1000 * 60 * 60));
+
+        let texto, color;
+        if (diffHs < 1) {
+            texto = 'hace minutos';
+            color = '#86efac';
+        } else if (diffHs < 24) {
+            texto = `hace ${diffHs}h`;
+            color = '#86efac';
+        } else {
+            const dias = Math.floor(diffHs / 24);
+            texto = `hace ${dias}d`;
+            color = dias > 3 ? '#fca5a5' : '#fde68a';
+        }
+
+        const icono = data.last_status === 'error' ? 'cloud-slash' : 'cloud-check';
+        el.innerHTML = `<i class="bi bi-${icono} me-1"></i><span style="color:${color}">Backup ${texto}</span>`;
+    } catch (e) {
+        console.error('Error backup status:', e);
+    }
+}
+
+
+async function hacerBackupManual() {
+    const btn = document.getElementById('btn-backup');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    try {
+        const resp = await fetch('/api/backup-manual', { method: 'POST' });
+        const data = await resp.json();
+
+        if (resp.ok) {
+            alert('Backup iniciado en segundo plano. Tarda unos segundos. Recargar la pagina en un momento para ver el estado.');
+            setTimeout(actualizarInfoBackup, 10000);  // Actualizar despues de 10s
+        } else {
+            alert('Error: ' + (data.error || 'desconocido'));
+        }
+    } catch (error) {
+        alert('Error de conexion: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
     }
 }
 

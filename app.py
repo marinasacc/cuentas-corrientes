@@ -162,11 +162,58 @@ def init_db():
 
 
 def parse_excel(filepath):
-    """Parsear el Excel de Magus y devolver datos limpios."""
+    """Parsear el Excel de Magus y devolver datos limpios.
+
+    Detecta dinamicamente la columna de moneda para funcionar con
+    distintos formatos de Magus (algunos exports tienen columnas extras).
+
+    Estructura esperada (relativa a la columna de moneda):
+      - col 0: Codigo del cliente
+      - col 1: Nombre
+      - col moneda: '$' o 'U$S' (la detectamos)
+      - col moneda + 2: Saldo +91 dias
+      - col moneda + 3: Saldo 61-90 dias
+      - col moneda + 5: Saldo 31-60 dias
+      - col moneda + 6: Saldo 0-30 dias
+      - ultima columna: Saldo total
+    """
     df = pd.read_excel(filepath, header=None)
 
-    # Filtrar: solo pesos (columna 3 == '$'), ignorar TOTAL y filas vacias
-    df = df[df[3] == '$'].copy()
+    if df.shape[1] < 7:
+        raise ValueError(
+            f'El Excel tiene solo {df.shape[1]} columnas, formato no reconocido.'
+        )
+
+    # 1. Detectar columna de moneda: la primera columna donde aparezca '$'
+    col_moneda = None
+    for c in range(df.shape[1]):
+        valores = df[c].dropna().astype(str).str.strip().unique()
+        if '$' in valores:
+            col_moneda = c
+            break
+
+    if col_moneda is None:
+        raise ValueError(
+            'No se encontro la columna de moneda ($) en el Excel. '
+            'Verificar que el formato sea el exportado por Magus.'
+        )
+
+    # 2. Calcular posiciones de saldos a partir de la columna de moneda
+    col_91_mas = col_moneda + 2
+    col_61_90 = col_moneda + 3
+    col_31_60 = col_moneda + 5
+    col_0_30 = col_moneda + 6
+    col_total = df.shape[1] - 1  # ultima columna
+
+    # Validar que existan las columnas calculadas
+    if col_0_30 >= df.shape[1]:
+        raise ValueError(
+            f'Estructura inesperada: faltan columnas de saldo despues de '
+            f'la columna de moneda (col {col_moneda}).'
+        )
+
+    # 3. Filtrar: solo filas de pesos ($), ignorar TOTAL y filas vacias
+    df = df[df[col_moneda].astype(str).str.strip() == '$'].copy()
     df = df[df[1] != 'TOTAL'].copy()
     df = df[df[0].notna()].copy()
 
@@ -175,12 +222,16 @@ def parse_excel(filepath):
         clientes.append({
             'codigo': str(row[0]).strip(),
             'nombre': str(row[1]).strip() if pd.notna(row[1]) else '',
-            'saldo_91_mas': float(row[5]) if pd.notna(row[5]) else 0.0,
-            'saldo_61_90': float(row[6]) if pd.notna(row[6]) else 0.0,
-            'saldo_31_60': float(row[8]) if pd.notna(row[8]) else 0.0,
-            'saldo_0_30': float(row[9]) if pd.notna(row[9]) else 0.0,
-            'saldo_total': float(row[12]) if pd.notna(row[12]) else 0.0,
+            'saldo_91_mas': float(row[col_91_mas]) if pd.notna(row[col_91_mas]) else 0.0,
+            'saldo_61_90': float(row[col_61_90]) if pd.notna(row[col_61_90]) else 0.0,
+            'saldo_31_60': float(row[col_31_60]) if pd.notna(row[col_31_60]) else 0.0,
+            'saldo_0_30': float(row[col_0_30]) if pd.notna(row[col_0_30]) else 0.0,
+            'saldo_total': float(row[col_total]) if pd.notna(row[col_total]) else 0.0,
         })
+
+    print(f'[parse_excel] Excel con {df.shape[1] if df.shape[0] > 0 else "N/A"} cols, '
+          f'moneda en col {col_moneda}, total en col {col_total}. '
+          f'{len(clientes)} clientes parseados.')
 
     return clientes
 
